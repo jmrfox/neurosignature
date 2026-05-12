@@ -1,0 +1,38 @@
+# Default configuration for neurosignature framework
+
+# System dimensions
+system:
+  n_inputs: 25      # N_S: number of synaptic input channels
+  n_hidden: 64      # N_H: hidden dynamical dimension
+  n_outputs: 32     # N_C: number of output channels
+
+# System dynamics parameters
+dynamics:
+  spectral_radius: 0.8    # Target spectral radius for recurrent weights (< 1 for stability)
+  sparsity: 0.1          # Sparsity level for recurrent connections
+  tau_range: [10.0, 100.0]  # Timescale range in ms (uniform distribution)
+
+# Simulation parameters
+simulation:
+  dt_ms: 1.0           # Integration time step in milliseconds
+  duration_ms: 10000.0 # Total simulation duration in milliseconds (10 seconds)
+
+# Input generation parameters
+input:
+  lambda_max: 100.0   # Master Poisson rate in Hz
+  tau_s: 10.0         # Synaptic decay constant in ms
+  # Routing probabilities: null means uniform distribution
+  routing_probs: null
+
+# Descriptor computation
+descriptor:
+  top_k_eigenvalues: 10    # Number of top covariance eigenvalues to include
+  n_autocorr_lags: 10      # Number of autocorrelation lags
+  n_dominant_freqs: 5      # Number of dominant frequencies to extract
+  include_spectral: true   # Include spectral statistics in descriptor
+
+# Experiment parameters
+experiment:
+  n_systems_ensemble: 20   # Number of systems in random ensemble
+  n_input_realizations: 5  # Number of input realizations for robust descriptors
+  random_seed: 42          # Base random seed for reproducibility
