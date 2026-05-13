@@ -2,6 +2,7 @@
 
 import numpy as np
 from typing import Dict, List, Optional
+from neurosignature.math import safe_normalize
 
 
 def compute_spectral_statistics(
@@ -70,9 +71,7 @@ def compute_spectral_statistics(
 
         # Spectral entropy
         if np.sum(power_no_dc) > 0:
-            power_norm = power_no_dc / np.sum(power_no_dc)
-            # Avoid log(0)
-            power_norm = np.clip(power_norm, 1e-12, 1.0)
+            power_norm = safe_normalize(power_no_dc)
             entropy = -np.sum(power_norm * np.log2(power_norm))
         else:
             entropy = 0.0

@@ -2,13 +2,30 @@
 
 import numpy as np
 from typing import List, Dict, Optional
-from neurosignature.systems.recurrent_system import ContinuousTimeRNN
 from neurosignature.simulation.simulator import Simulator
 from neurosignature.summaries.descriptors import DescriptorAssembler
 from neurosignature.metrics.distances import (
     compute_pairwise_distance_matrix,
     compute_distance_statistics,
 )
+
+
+class _PlaceholderSystem:
+    """Placeholder system for initializing default Simulator."""
+
+    def __init__(self):
+        self.n_hidden = 1
+        self.n_inputs = 1
+        self.n_outputs = 1
+
+    def reset_state(self):
+        return np.zeros(1)
+
+    def step(self, h, u, dt):
+        return h
+
+    def compute_output(self, h):
+        return h
 
 
 class SystemComparator:
@@ -22,24 +39,36 @@ class SystemComparator:
     5. Analyze distance structure
 
     Args:
-        simulator: Simulator instance for running systems
-        descriptor_assembler: DescriptorAssembler for computing descriptors
-        dt_ms: Time step in milliseconds
+        simulator: Simulator instance. If None, creates default Simulator.
+        descriptor_assembler: DescriptorAssembler. If None, creates default.
+        dt_ms: Time step in milliseconds (default: 1.0)
+
+    Example:
+        >>> comparator = SystemComparator()
+        >>> result = comparator.compare_with_shared_input(systems, inputs)
+        >>> distances = result["distance_matrix"]
     """
 
     def __init__(
         self,
-        simulator: Simulator,
-        descriptor_assembler: DescriptorAssembler,
+        simulator: Optional[Simulator] = None,
+        descriptor_assembler: Optional[DescriptorAssembler] = None,
         dt_ms: float = 1.0,
     ):
+        # Create default instances if not provided
+        if simulator is None:
+            # Placeholder system will be replaced in comparison methods
+            simulator = Simulator(_PlaceholderSystem(), dt_ms)
+        if descriptor_assembler is None:
+            descriptor_assembler = DescriptorAssembler()
+
         self.simulator = simulator
         self.descriptor_assembler = descriptor_assembler
         self.dt_ms = dt_ms
 
     def compare_with_shared_input(
         self,
-        systems: List[ContinuousTimeRNN],
+        systems: list,
         input_currents: np.ndarray,
     ) -> Dict:
         """Compare systems using the same input realization.
@@ -82,7 +111,7 @@ class SystemComparator:
 
     def compare_with_varied_inputs(
         self,
-        systems: List[ContinuousTimeRNN],
+        systems: list,
         input_generator,
         n_realizations: int = 5,
     ) -> Dict:
@@ -98,8 +127,6 @@ class SystemComparator:
         Returns:
             Dictionary with averaged descriptors and distance matrix
         """
-        n_systems = len(systems)
-
         # Collect descriptors across realizations
         all_descriptors = []
 
@@ -137,8 +164,8 @@ class SystemComparator:
 
     def compare_groups(
         self,
-        group_a: List[ContinuousTimeRNN],
-        group_b: List[ContinuousTimeRNN],
+        group_a: list,
+        group_b: list,
         input_currents: np.ndarray,
     ) -> Dict:
         """Compare two groups of systems.

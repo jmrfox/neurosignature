@@ -52,9 +52,7 @@ def compute_global_statistics(
 
     # Pairwise correlation matrix
     # Standardize each channel
-    standardized = (traces - np.mean(traces, axis=0)) / (
-        np.std(traces, axis=0) + 1e-10
-    )
+    standardized = (traces - np.mean(traces, axis=0)) / (np.std(traces, axis=0) + 1e-10)
     correlation_matrix = np.corrcoef(standardized.T)
 
     # Covariance eigenvalues
@@ -69,7 +67,7 @@ def compute_global_statistics(
         mean_trace = trace - np.mean(trace)
 
         autocorr = np.correlate(mean_trace, mean_trace, mode="full")
-        autocorr = autocorr[len(autocorr) // 2:]
+        autocorr = autocorr[len(autocorr) // 2 :]
 
         if len(autocorr) > 1 and autocorr[0] > 0:
             autocorr = autocorr / autocorr[0]
@@ -135,3 +133,39 @@ def concatenate_statistics(
     descriptors.append(np.array([np.mean(off_diag_corr), np.std(off_diag_corr)]))
 
     return np.concatenate([d.flatten() for d in descriptors])
+
+
+def compute_descriptor(
+    traces: np.ndarray,
+    top_k_eigenvalues: int = 10,
+    n_autocorr_lags: int = 10,
+) -> np.ndarray:
+    """Compute complete descriptor vector from traces in one step.
+
+    Combines channel and global statistics into a single flat vector.
+    This is a convenience wrapper around compute_channel_statistics,
+    compute_global_statistics, and concatenate_statistics.
+
+    Args:
+        traces: Output traces, shape (n_timesteps, n_channels)
+        top_k_eigenvalues: Number of top covariance eigenvalues (default: 10)
+        n_autocorr_lags: Number of autocorrelation lags (default: 10)
+
+    Returns:
+        Complete descriptor vector
+
+    Example:
+        >>> traces = np.random.randn(1000, 8)  # 1000 steps, 8 channels
+        >>> desc = compute_descriptor(traces)
+        >>> desc.shape
+        (74,)  # depends on n_channels and parameters
+    """
+    channel_stats = compute_channel_statistics(traces)
+    global_stats = compute_global_statistics(traces, max_lag=n_autocorr_lags)
+
+    return concatenate_statistics(
+        channel_stats,
+        global_stats,
+        top_k_eigenvalues=top_k_eigenvalues,
+        n_autocorr_lags=n_autocorr_lags,
+    )

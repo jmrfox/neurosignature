@@ -2,6 +2,7 @@
 
 import numpy as np
 from typing import List, Optional
+from neurosignature.math import alpha_kernel as _alpha_kernel
 
 
 class SynapticKernel:
@@ -34,13 +35,7 @@ class SynapticKernel:
         Returns:
             Kernel values at each time point
         """
-        t = np.asarray(t_ms)
-        t_norm = t / self.tau_s
-        # Alpha function: (t/tau) * exp(-t/tau)
-        alpha = t_norm * np.exp(-t_norm)
-        # Zero for t < 0 (Heaviside)
-        alpha[t < 0] = 0.0
-        return alpha
+        return _alpha_kernel(t_ms, self.tau_s)
 
     def convolve_events(
         self,

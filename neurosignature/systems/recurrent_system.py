@@ -2,16 +2,19 @@
 
 import numpy as np
 from typing import Union, Callable
+from neurosignature.math import relu, softplus
 
 
 class ContinuousTimeRNN:
     """Passive subthreshold dynamical operator with split recurrent structure.
 
-    Dynamics: dh/dt = -Λh + g * W_prop @ φ(W_int @ h + W_u @ u)
+    Dynamics: dh/dt = -Λh + g * W_prop @ φ(W_int @ h) + W_u @ u
     Output: v = V_rest + polarity_transform(W_o @ h)
 
     This implements a dissipative filtering system rather than an autonomous
     recurrent network, with resting potential-centered dynamics.
+    Note: the input term W_u @ u is not scaled by g, enabling passive
+    (g=0) systems to still respond to inputs.
 
     All weight matrices must be provided explicitly. Use SystemGenerator
     for convenient matrix initialization methods.
@@ -71,7 +74,7 @@ class ContinuousTimeRNN:
         if self.phi_name == "tanh":
             self.phi: Callable = np.tanh
         else:
-            self.phi = lambda x: np.log(1 + np.exp(x))  # softplus
+            self.phi = softplus  # Use imported softplus function
 
         # Set timescale
         if np.isscalar(tau):
@@ -114,17 +117,21 @@ class ContinuousTimeRNN:
         # Leak term: -Λh where Λ = 1/tau
         leak = -h / self.tau
 
-        # Recurrent term: g * W_prop @ φ(W_int @ h + W_u @ u)
-        pre_activation = self.W_int @ h + self.W_u @ u
-        recurrent = self.g * (self.W_prop @ self.phi(pre_activation))
+        # Input term: W_u @ u (direct drive, not scaled by g)
+        input_term = self.W_u @ u
 
-        # Combined dynamics
-        dh = leak + recurrent
+        # Recurrent term: g * W_prop @ φ(W_int @ h)
+        recurrent = self.g * (self.W_prop @ self.phi(self.W_int @ h))
+
+        # Combined dynamics: dh/dt = -Λh + W_u @ u + g * W_prop @ φ(W_int @ h)
+        dh = leak + input_term + recurrent
         h_new = h + dt * dh
 
         return h_new
 
-    def compute_output(self, h: np.ndarray) -> np.ndarray:
+    def compute_output(
+        self, h: np.ndarray, polarity_function: str = "relu"
+    ) -> np.ndarray:
         """Compute output from hidden state with polarity transform.
 
         Args:
@@ -136,13 +143,13 @@ class ContinuousTimeRNN:
         # Base output projection
         projection = self.W_o @ h
 
+        pfxn_map = {"relu": relu, "softplus": softplus}
+
         # Apply polarity transform
         if self.polarity == "excitatory":
-            # softplus: always positive
-            perturbation = np.log(1 + np.exp(projection))
+            perturbation = pfxn_map[polarity_function](projection)
         elif self.polarity == "inhibitory":
-            # negative softplus
-            perturbation = -np.log(1 + np.exp(projection))
+            perturbation = -pfxn_map[polarity_function](projection)
         else:
             # bipolar: linear
             perturbation = projection

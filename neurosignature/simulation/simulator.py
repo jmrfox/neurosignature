@@ -1,24 +1,29 @@
 """Simulation engine for running dynamical systems."""
 
 import numpy as np
-from typing import Optional, Tuple
-from neurosignature.systems.recurrent_system import ContinuousTimeRNN
+from typing import Optional, Tuple, Any
 
 
 class Simulator:
-    """Simulation engine for running dynamical system forward in time.
+    """Simulation engine for running dynamical systems forward in time.
 
-    Uses Euler integration to simulate the continuous-time dynamics:
-    h[t+1] = h[t] + dt * (-h[t] + tanh(W_h @ h[t] + W_u @ u[t] + b_h)) / tau
+    Uses Euler integration with system-provided step dynamics:
+    h[t+1] = system.step(h[t], u[t], dt)
+
+    The system must implement:
+    - step(h, u, dt): Compute next hidden state
+    - compute_output(h): Compute output from hidden state
+    - reset_state(): Return initial hidden state
+    - n_hidden, n_inputs, n_outputs: Int properties
 
     Args:
-        system: Dynamical system to simulate
+        system: Dynamical system with step() interface
         dt_ms: Integration time step in milliseconds (default: 1.0)
     """
 
     def __init__(
         self,
-        system: ContinuousTimeRNN,
+        system: Any,
         dt_ms: float = 1.0,
     ):
         self.system = system
@@ -106,11 +111,12 @@ class Simulator:
         """Run same input through multiple different systems.
 
         Args:
-            systems: List of ContinuousTimeRNN instances
+            systems: List of systems with step() interface
             inputs: Input currents, shape (n_timesteps, n_inputs)
 
         Returns:
-            outputs: Array of output traces, shape (n_systems, n_timesteps, n_outputs)
+            outputs: Array of output traces, shape
+                (n_systems, n_timesteps, n_outputs)
         """
         n_systems = len(systems)
         n_steps = inputs.shape[0]
@@ -119,12 +125,32 @@ class Simulator:
         all_outputs = np.zeros((n_systems, n_steps, n_outputs))
 
         for i, system in enumerate(systems):
-            # Create temporary simulator for this system
-            sim = Simulator(system, self.dt_ms)
-            outputs, _ = sim.run(inputs)
+            outputs, _ = self._run_single(system, inputs)
             all_outputs[i] = outputs
 
         return all_outputs
+
+    def _run_single(
+        self,
+        system: Any,
+        inputs: np.ndarray,
+        initial_state: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Run simulation for a single system (internal helper)."""
+        n_steps = inputs.shape[0]
+
+        if initial_state is None:
+            h = system.reset_state()
+        else:
+            h = initial_state.copy()
+
+        outputs = np.zeros((n_steps, system.n_outputs))
+
+        for t in range(n_steps):
+            outputs[t] = system.compute_output(h)
+            h = system.step(h, inputs[t], self.dt_ms)
+
+        return outputs, None
 
     def check_stability(
         self,

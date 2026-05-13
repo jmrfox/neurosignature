@@ -3,6 +3,12 @@
 import numpy as np
 from typing import Optional, List
 from .recurrent_system import ContinuousTimeRNN
+from ..math import (
+    symmetrize,
+    make_sparse_mask,
+    scale_spectral_radius,
+    sample_loguniform,
+)
 
 
 class SystemGenerator:
@@ -48,19 +54,13 @@ class SystemGenerator:
         Returns:
             W_int matrix (n_hidden x n_hidden)
         """
-        # Create sparse mask
-        mask = rng.random((self.n_hidden, self.n_hidden)) < sparsity
+        mask = make_sparse_mask((self.n_hidden, self.n_hidden), sparsity, rng)
 
-        # Initialize weights from normal distribution
         W = rng.normal(0, 1.0, (self.n_hidden, self.n_hidden))
         W = W * mask
 
-        # Scale to target spectral radius
         if np.any(mask):
-            eigvals = np.linalg.eigvals(W)
-            current_radius = np.max(np.abs(eigvals))
-            if current_radius > 0:
-                W = W * (r_int / current_radius)
+            W = scale_spectral_radius(W, r_int)
 
         return W
 
@@ -80,20 +80,14 @@ class SystemGenerator:
         Returns:
             W_prop matrix (n_hidden x n_hidden)
         """
-        # Create sparse asymmetric matrix
-        mask = rng.random((self.n_hidden, self.n_hidden)) < sparsity
+        mask = make_sparse_mask((self.n_hidden, self.n_hidden), sparsity, rng)
         A = rng.normal(0, 1.0, (self.n_hidden, self.n_hidden))
         A = A * mask
 
-        # Make symmetric: (A + A^T) / 2
-        W = (A + A.T) / 2.0
+        W = symmetrize(A)
 
-        # Scale to target spectral radius
         if np.any(W != 0):
-            eigvals = np.linalg.eigvals(W)
-            current_radius = np.max(np.abs(eigvals))
-            if current_radius > 0:
-                W = W * (r_prop / current_radius)
+            W = scale_spectral_radius(W, r_prop)
 
         return W
 
@@ -183,10 +177,7 @@ class SystemGenerator:
 
         # Generate timescales
         if tau_distribution == "loguniform":
-            log_min = np.log(tau_range[0])
-            log_max = np.log(tau_range[1])
-            log_tau = rng.uniform(log_min, log_max, size=self.n_hidden)
-            tau = np.exp(log_tau)
+            tau = sample_loguniform(tau_range[0], tau_range[1], self.n_hidden, rng)
         else:
             tau = rng.uniform(tau_range[0], tau_range[1], size=self.n_hidden)
 
@@ -381,153 +372,6 @@ class SystemGenerator:
                 g=g,
                 sparsity=sparsity,
                 seed=self.base_seed + 5000 + i,
-            )
-            systems.append(system)
-        return systems
-
-    # Operating regime presets (design_2.3.md)
-    def generate_passive_mode_system(
-        self,
-        polarity: str = "bipolar",
-        seed: Optional[int] = None,
-    ) -> ContinuousTimeRNN:
-        """Generate system in passive filtering mode.
-
-        Leak-dominated dynamics for stable membrane-like filtering.
-        Best for: initial validation, cable equation approximation
-
-        Parameter regime (design_2.3.md Section 3):
-        - g: 0 to 0.2 (weak recurrence)
-        - r_prop: 0.05 to 0.2 (small spectral radius)
-        - Behavior: EPSP/IPSP-like fluctuations, exponential decay
-
-        Args:
-            polarity: "bipolar", "excitatory", or "inhibitory"
-            seed: Random seed
-
-        Returns:
-            CTRNN configured for passive filtering
-        """
-        return self.generate_passive_system(
-            polarity=polarity,
-            g=0.0,  # Start with zero recurrence as recommended
-            r_int=0.5,
-            r_prop=0.1,
-            sparsity=0.1,
-            seed=seed,
-        )
-
-    def generate_weakly_active_system(
-        self,
-        polarity: str = "bipolar",
-        seed: Optional[int] = None,
-    ) -> ContinuousTimeRNN:
-        """Generate system in weakly active mode.
-
-        Moderate recurrence for richer operator diversity.
-        Best for: exploring functional differences between systems
-
-        Parameter regime (design_2.3.md Section 4, Phase 2):
-        - g: 0.2 to 0.4 (moderate recurrence)
-        - r_prop: 0.2 to 0.5 (moderate spectral radius)
-        - Behavior: longer memory, nonlinear amplification
-
-        Args:
-            polarity: "bipolar", "excitatory", or "inhibitory"
-            seed: Random seed
-
-        Returns:
-            CTRNN configured for weakly active dynamics
-        """
-        return self.generate_passive_system(
-            polarity=polarity,
-            g=0.3,
-            r_int=0.6,
-            r_prop=0.3,
-            sparsity=0.15,
-            seed=seed,
-        )
-
-    def generate_active_mode_system(
-        self,
-        polarity: str = "bipolar",
-        seed: Optional[int] = None,
-    ) -> ContinuousTimeRNN:
-        """Generate system in active nonlinear mode.
-
-        Strong recurrence for rich dynamical computation.
-        Best for: testing SI descriptor robustness, oscillatory systems
-
-        Parameter regime (design_2.3.md Section 4, Phase 3):
-        - g: 0.3 to 1.0 (strong recurrence)
-        - r_prop: 0.5 to 1.0 (larger spectral radius)
-        - Behavior: oscillatory transients, complex autocorrelation
-
-        Args:
-            polarity: "bipolar", "excitatory", or "inhibitory"
-            seed: Random seed
-
-        Returns:
-            CTRNN configured for active nonlinear dynamics
-        """
-        return self.generate_passive_system(
-            polarity=polarity,
-            g=0.6,
-            r_int=0.7,
-            r_prop=0.6,
-            sparsity=0.2,
-            seed=seed,
-        )
-
-    def generate_regime_comparison(
-        self,
-        polarity: str = "bipolar",
-    ) -> dict:
-        """Generate three systems spanning passive to active regimes.
-
-        Creates systems with identical dimensions but different dynamical
-        regimes for comparative analysis.
-
-        Args:
-            polarity: Polarity mode for all systems
-
-        Returns:
-            Dict with keys "passive", "weakly_active", "active"
-        """
-        return {
-            "passive": self.generate_passive_mode_system(polarity, seed=1000),
-            "weakly_active": self.generate_weakly_active_system(polarity, seed=2000),
-            "active": self.generate_active_mode_system(polarity, seed=3000),
-        }
-
-    def generate_activity_scale_sweep(
-        self,
-        n_systems: int = 5,
-        polarity: str = "bipolar",
-    ) -> List[ContinuousTimeRNN]:
-        """Generate systems with gradually increasing activity levels.
-
-        Sweeps global gain g from passive (g=0) to weakly active (g=0.4)
-        while keeping other parameters stable.
-
-        Args:
-            n_systems: Number of systems to generate
-            polarity: Polarity mode
-
-        Returns:
-            List of systems with increasing activity
-        """
-        systems = []
-        for i in range(n_systems):
-            # Linear interpolation from g=0.0 to g=0.4
-            g = 0.0 + (0.4 * i / (n_systems - 1)) if n_systems > 1 else 0.0
-            system = self.generate_passive_system(
-                polarity=polarity,
-                g=g,
-                r_int=0.5,
-                r_prop=0.1 + (0.2 * i / (n_systems - 1)),
-                sparsity=0.1,
-                seed=self.base_seed + 6000 + i,
             )
             systems.append(system)
         return systems
