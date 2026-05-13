@@ -1,23 +1,36 @@
-"""Continuous-time recurrent neural dynamical system."""
+"""Passive subthreshold dynamical operator framework."""
 
 import numpy as np
-from typing import Optional, Union
+from typing import Union, Callable
 
 
 class ContinuousTimeRNN:
-    """Continuous-time recurrent neural network with tanh nonlinearity.
+    """Passive subthreshold dynamical operator with split recurrent structure.
 
-    Dynamics: dh/dt = (-h + tanh(W_h @ h + W_u @ u + b_h)) / tau
-    Output: v = W_o @ h + b_o
+    Dynamics: dh/dt = -Λh + g * W_prop @ φ(W_int @ h + W_u @ u)
+    Output: v = V_rest + polarity_transform(W_o @ h)
+
+    This implements a dissipative filtering system rather than an autonomous
+    recurrent network, with resting potential-centered dynamics.
+
+    All weight matrices must be provided explicitly. Use SystemGenerator
+    for convenient matrix initialization methods.
 
     Args:
         n_hidden: Number of hidden state dimensions (N_H)
         n_inputs: Number of input channels (N_S)
         n_outputs: Number of output channels (N_C)
-        tau: Timescale(s) for hidden state decay. Scalar or array of shape (n_hidden,)
-        spectral_radius: Target spectral radius for recurrent weights (default: 0.8)
-        sparsity: Sparsity level for recurrent weights [0, 1] (default: 0.1)
-        seed: Random seed for reproducibility
+        W_int: Integration matrix (N_H x N_H)
+        W_prop: Propagation matrix (N_H x N_H)
+        W_u: Input projection matrix (N_H x N_S)
+        W_o: Output projection matrix (N_C x N_H)
+        g: Global recurrent gain (default: 0.1)
+        tau: Timescale(s) for hidden state decay. Scalar or array of
+            shape (n_hidden,). Default: 50.0 ms
+        V_rest: Resting membrane potential in mV (default: -65.0)
+        polarity: Output polarity mode - "bipolar", "excitatory",
+            or "inhibitory"
+        phi: Nonlinearity - "tanh" or "softplus"
     """
 
     def __init__(
@@ -25,51 +38,67 @@ class ContinuousTimeRNN:
         n_hidden: int,
         n_inputs: int,
         n_outputs: int,
-        tau: Optional[Union[float, np.ndarray]] = None,
-        spectral_radius: float = 0.8,
-        sparsity: float = 0.1,
-        seed: Optional[int] = None,
+        W_int: np.ndarray,
+        W_prop: np.ndarray,
+        W_u: np.ndarray,
+        W_o: np.ndarray,
+        g: float = 0.1,
+        tau: Union[float, np.ndarray] = 50.0,
+        V_rest: float = -65.0,
+        polarity: str = "bipolar",
+        phi: str = "tanh",
     ):
         self.n_hidden = n_hidden
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
-        self.spectral_radius = spectral_radius
-        self.sparsity = sparsity
+        self.g = g
+        self.V_rest = V_rest
+        self.polarity = polarity.lower()
+        self.phi_name = phi.lower()
 
-        # Initialize random number generator
-        self.rng = np.random.default_rng(seed)
+        # Validate polarity
+        if self.polarity not in ["bipolar", "excitatory", "inhibitory"]:
+            raise ValueError(
+                f"Invalid polarity: {polarity}. "
+                "Use 'bipolar', 'excitatory', or 'inhibitory'"
+            )
 
-        # Set timescale (default: uniform 10-100ms range)
-        if tau is None:
-            self.tau = self.rng.uniform(10.0, 100.0, size=n_hidden)
-        elif np.isscalar(tau):
+        # Validate phi
+        if self.phi_name not in ["tanh", "softplus"]:
+            raise ValueError(f"Invalid phi: {phi}. Use 'tanh' or 'softplus'")
+
+        # Set nonlinearity function
+        if self.phi_name == "tanh":
+            self.phi: Callable = np.tanh
+        else:
+            self.phi = lambda x: np.log(1 + np.exp(x))  # softplus
+
+        # Set timescale
+        if np.isscalar(tau):
             self.tau = np.full(n_hidden, tau)
         else:
             self.tau = np.asarray(tau)
 
-        # Initialize weights and biases
-        self.W_h = self._initialize_recurrent_weights()
-        self.W_u = self.rng.normal(0, 1.0 / np.sqrt(n_inputs), (n_hidden, n_inputs))
-        self.W_o = self.rng.normal(0, 1.0 / np.sqrt(n_hidden), (n_outputs, n_hidden))
-        self.b_h = np.zeros(n_hidden)
-        self.b_o = np.zeros(n_outputs)
+        # Validate and store weight matrices
+        self.W_int = np.asarray(W_int)
+        if self.W_int.shape != (n_hidden, n_hidden):
+            raise ValueError(
+                f"W_int shape {self.W_int.shape} != ({n_hidden}, {n_hidden})"
+            )
 
-    def _initialize_recurrent_weights(self) -> np.ndarray:
-        """Initialize sparse recurrent weights with controlled spectral radius."""
-        # Create sparse mask
-        mask = self.rng.random((self.n_hidden, self.n_hidden)) < self.sparsity
+        self.W_prop = np.asarray(W_prop)
+        if self.W_prop.shape != (n_hidden, n_hidden):
+            raise ValueError(
+                f"W_prop shape {self.W_prop.shape} != ({n_hidden}, {n_hidden})"
+            )
 
-        # Initialize weights from normal distribution
-        W = self.rng.normal(0, 1.0, (self.n_hidden, self.n_hidden))
-        W = W * mask
+        self.W_u = np.asarray(W_u)
+        if self.W_u.shape != (n_hidden, n_inputs):
+            raise ValueError(f"W_u shape {self.W_u.shape} != ({n_hidden}, {n_inputs})")
 
-        # Scale to target spectral radius
-        if np.any(mask):
-            current_radius = np.max(np.abs(np.linalg.eigvals(W)))
-            if current_radius > 0:
-                W = W * (self.spectral_radius / current_radius)
-
-        return W
+        self.W_o = np.asarray(W_o)
+        if self.W_o.shape != (n_outputs, n_hidden):
+            raise ValueError(f"W_o shape {self.W_o.shape} != ({n_outputs}, {n_hidden})")
 
     def step(self, h: np.ndarray, u: np.ndarray, dt: float) -> np.ndarray:
         """Single Euler integration step.
@@ -82,25 +111,43 @@ class ContinuousTimeRNN:
         Returns:
             Updated hidden state, shape (n_hidden,)
         """
-        # Compute pre-activation
-        pre_activation = self.W_h @ h + self.W_u @ u + self.b_h
+        # Leak term: -Λh where Λ = 1/tau
+        leak = -h / self.tau
 
-        # Euler step
-        dh = (-h + np.tanh(pre_activation)) / self.tau
+        # Recurrent term: g * W_prop @ φ(W_int @ h + W_u @ u)
+        pre_activation = self.W_int @ h + self.W_u @ u
+        recurrent = self.g * (self.W_prop @ self.phi(pre_activation))
+
+        # Combined dynamics
+        dh = leak + recurrent
         h_new = h + dt * dh
 
         return h_new
 
     def compute_output(self, h: np.ndarray) -> np.ndarray:
-        """Compute output from hidden state.
+        """Compute output from hidden state with polarity transform.
 
         Args:
             h: Hidden state, shape (n_hidden,)
 
         Returns:
-            Output, shape (n_outputs,)
+            Output voltage, shape (n_outputs,)
         """
-        return self.W_o @ h + self.b_o
+        # Base output projection
+        projection = self.W_o @ h
+
+        # Apply polarity transform
+        if self.polarity == "excitatory":
+            # softplus: always positive
+            perturbation = np.log(1 + np.exp(projection))
+        elif self.polarity == "inhibitory":
+            # negative softplus
+            perturbation = -np.log(1 + np.exp(projection))
+        else:
+            # bipolar: linear
+            perturbation = projection
+
+        return self.V_rest + perturbation
 
     def reset_state(self) -> np.ndarray:
         """Return initial hidden state (zeros)."""
@@ -109,12 +156,15 @@ class ContinuousTimeRNN:
     def get_parameters(self) -> dict:
         """Return dictionary of all system parameters."""
         return {
-            "W_h": self.W_h,
+            "W_int": self.W_int,
+            "W_prop": self.W_prop,
             "W_u": self.W_u,
             "W_o": self.W_o,
-            "b_h": self.b_h,
-            "b_o": self.b_o,
+            "g": self.g,
             "tau": self.tau,
+            "V_rest": self.V_rest,
+            "polarity": self.polarity,
+            "phi": self.phi_name,
             "n_hidden": self.n_hidden,
             "n_inputs": self.n_inputs,
             "n_outputs": self.n_outputs,

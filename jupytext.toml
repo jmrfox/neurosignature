@@ -1,0 +1,9 @@
+# Jupytext configuration for neurosignature
+# This enables automatic sync between .py and .ipynb files
+
+# Default formats for notebooks - py:percent format for cleaner git diffs
+formats = "notebooks///ipynb,notebooks///py:percent"
+
+# Settings
+notebook_metadata_filter = "-all"
+cell_metadata_filter = "-all"

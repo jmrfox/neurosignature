@@ -13,6 +13,7 @@ dependencies = [
     "scipy>=1.11",
     "scikit-learn>=1.3",
     "pyyaml>=6.0",
+    "pynapple>=0.11.1",
 ]
 
 [project.optional-dependencies]
@@ -28,10 +29,15 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
+[tool.uv.sources]
+apidump = { git = "https://github.com/jmrfox/apidump.git" }
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
     "pytest>=9.0.3",
     "jupyter>=1.0",
     "notebook>=7.0",
+    "apidump",
+    "jupytext>=1.19.2",
 ]
