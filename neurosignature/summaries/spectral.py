@@ -1,12 +1,13 @@
 """Spectral statistics using FFT-based analysis."""
 
 import numpy as np
-from typing import Dict, List, Optional
+import pynapple as nap
+from typing import Dict, List, Optional, Union
 from neurosignature.math import safe_normalize
 
 
 def compute_spectral_statistics(
-    traces: np.ndarray,
+    traces: Union[np.ndarray, nap.TsdFrame],
     dt_ms: float = 1.0,
     n_dominant_freqs: int = 5,
     freq_bands: Optional[List[tuple]] = None,
@@ -28,9 +29,9 @@ def compute_spectral_statistics(
         - band_powers: Power in each frequency band per channel
         - band_ratios: Ratios between low/high frequency power
     """
+    traces = np.asarray(traces)
     n_steps, n_channels = traces.shape
     dt_s = dt_ms / 1000.0
-    sample_rate = 1.0 / dt_s
 
     # Frequency axis
     freqs = np.fft.rfftfreq(n_steps, dt_s)
@@ -90,7 +91,7 @@ def compute_spectral_statistics(
         band_powers_all.append(band_powers)
 
     # Convert to arrays
-    dominant_frequencies = np.array(dominant_frequencies)  # (n_channels, n_dominant)
+    dominant_frequencies = np.array(dominant_frequencies)
     spectral_centroids = np.array(spectral_centroids)  # (n_channels,)
     spectral_entropies = np.array(spectral_entropies)  # (n_channels,)
     band_powers = np.array(band_powers_all)  # (n_channels, n_bands)

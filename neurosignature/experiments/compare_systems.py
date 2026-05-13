@@ -1,7 +1,7 @@
 """System comparison pipeline for computing pairwise distances."""
 
 import numpy as np
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 from neurosignature.simulation.simulator import Simulator
 from neurosignature.summaries.descriptors import DescriptorAssembler
 from neurosignature.metrics.distances import (
@@ -87,12 +87,9 @@ class SystemComparator:
             outputs, _ = sim.run(input_currents)
             outputs_list.append(outputs)
 
-        # Stack into batch
-        outputs_batch = np.array(outputs_list)
-
         # Compute descriptors
         descriptors = self.descriptor_assembler.compute_descriptors_batch(
-            outputs_batch, self.dt_ms
+            outputs_list, self.dt_ms
         )
 
         # Compute distances
@@ -141,9 +138,8 @@ class SystemComparator:
                 outputs_list.append(outputs)
 
             # Compute descriptors
-            outputs_batch = np.array(outputs_list)
             descriptors = self.descriptor_assembler.compute_descriptors_batch(
-                outputs_batch, self.dt_ms
+                outputs_list, self.dt_ms
             )
             all_descriptors.append(descriptors)
 
@@ -182,7 +178,6 @@ class SystemComparator:
         """
         all_systems = group_a + group_b
         n_a = len(group_a)
-        n_b = len(group_b)
 
         # Compute descriptors
         result = self.compare_with_shared_input(all_systems, input_currents)

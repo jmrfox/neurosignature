@@ -1,9 +1,17 @@
 """Descriptor assembly for system characterization."""
 
 import numpy as np
-from typing import Optional, Dict
-from .statistics import compute_channel_statistics, compute_global_statistics, concatenate_statistics
-from .spectral import compute_spectral_statistics, concatenate_spectral_descriptors
+import pynapple as nap
+from typing import Dict, Union
+from .statistics import (
+    compute_channel_statistics,
+    compute_global_statistics,
+    concatenate_statistics,
+)
+from .spectral import (
+    compute_spectral_statistics,
+    concatenate_spectral_descriptors,
+)
 
 
 class DescriptorAssembler:
@@ -33,7 +41,7 @@ class DescriptorAssembler:
 
     def compute_descriptor(
         self,
-        traces: np.ndarray,
+        traces: Union[np.ndarray, nap.TsdFrame],
         dt_ms: float = 1.0,
     ) -> np.ndarray:
         """Compute full descriptor vector from output traces.
@@ -77,29 +85,36 @@ class DescriptorAssembler:
 
     def compute_descriptors_batch(
         self,
-        traces_batch: np.ndarray,
+        traces_batch: Union[np.ndarray, list],
         dt_ms: float = 1.0,
     ) -> np.ndarray:
         """Compute descriptors for batch of trace arrays.
 
         Args:
-            traces_batch: Array of trace arrays, shape (n_systems, n_timesteps, n_channels)
+            traces_batch: Either a numpy array of shape
+                (n_systems, n_timesteps, n_channels), or a list of
+                ``TsdFrame`` objects (one per system).
             dt_ms: Sampling interval in milliseconds
 
         Returns:
             Descriptor matrix, shape (n_systems, descriptor_dim)
         """
-        n_systems = traces_batch.shape[0]
+        if isinstance(traces_batch, list):
+            items = traces_batch
+        else:
+            items = [traces_batch[i] for i in range(traces_batch.shape[0])]
+
+        n_systems = len(items)
 
         # Compute first descriptor to get dimension
-        first_desc = self.compute_descriptor(traces_batch[0], dt_ms)
+        first_desc = self.compute_descriptor(items[0], dt_ms)
         desc_dim = len(first_desc)
 
         descriptors = np.zeros((n_systems, desc_dim))
         descriptors[0] = first_desc
 
         for i in range(1, n_systems):
-            descriptors[i] = self.compute_descriptor(traces_batch[i], dt_ms)
+            descriptors[i] = self.compute_descriptor(items[i], dt_ms)
 
         return descriptors
 

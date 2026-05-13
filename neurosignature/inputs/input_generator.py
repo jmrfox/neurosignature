@@ -1,7 +1,8 @@
 """Unified input generation combining Poisson spikes with synaptic kernels."""
 
 import numpy as np
-from typing import Optional
+import pynapple as nap
+from typing import Optional, Tuple
 from .poisson_generator import PoissonGenerator
 from .synaptic_kernel import SynapticKernel
 
@@ -46,16 +47,17 @@ class InputGenerator:
             routing_probs=routing_probs,
             seed=seed,
         )
-        self.kernel = SynapticKernel(tau_s=tau_ms, dt_ms=dt_ms)
+        self.kernel = SynapticKernel(tau_ms=tau_ms, dt_ms=dt_ms)
 
-    def generate(self, duration_ms: float) -> np.ndarray:
+    def generate(self, duration_ms: float) -> nap.TsdFrame:
         """Generate smooth input currents.
 
         Args:
             duration_ms: Duration in milliseconds
 
         Returns:
-            Input current matrix, shape (n_timesteps, n_channels)
+            ``TsdFrame`` of shape (n_timesteps, n_channels) with smooth
+            input currents in nA.
         """
         # Generate events
         events = self.poisson.generate_events(duration_ms, self.dt_ms)
@@ -65,7 +67,9 @@ class InputGenerator:
 
         return currents
 
-    def generate_with_spikes(self, duration_ms: float) -> tuple:
+    def generate_with_spikes(
+        self, duration_ms: float
+    ) -> Tuple[nap.TsdFrame, nap.TsdFrame]:
         """Generate both spike trains and smoothed currents.
 
         Args:
@@ -73,17 +77,11 @@ class InputGenerator:
 
         Returns:
             (spike_train, currents) tuple:
-            - spike_train: Binary array (n_timesteps, n_channels)
-            - currents: Smooth currents (n_timesteps, n_channels)
+            - spike_train: ``TsdFrame`` binary (n_timesteps, n_channels)
+            - currents: ``TsdFrame`` smooth currents (n_timesteps, n_channels)
         """
+        ts_group = self.poisson.generate_events(duration_ms, self.dt_ms)
         spike_train = self.poisson.generate_spike_train(duration_ms, self.dt_ms)
-
-        # Convert spike train to event list format for kernel
-        events = []
-        for ch in range(self.n_channels):
-            spike_times = np.where(spike_train[:, ch] > 0)[0] * self.dt_ms
-            events.append(spike_times)
-
-        currents = self.kernel.generate_input_currents(events, duration_ms)
+        currents = self.kernel.generate_input_currents(ts_group, duration_ms)
 
         return spike_train, currents

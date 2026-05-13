@@ -1,7 +1,8 @@
 """Simulation engine for running dynamical systems."""
 
 import numpy as np
-from typing import Optional, Tuple, Any
+import pynapple as nap
+from typing import Any, List, Optional, Tuple, Union
 
 
 class Simulator:
@@ -31,22 +32,26 @@ class Simulator:
 
     def run(
         self,
-        inputs: np.ndarray,
+        inputs: Union[np.ndarray, nap.TsdFrame],
         initial_state: Optional[np.ndarray] = None,
         record_states: bool = False,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    ) -> Tuple[nap.TsdFrame, Optional[nap.TsdFrame]]:
         """Run simulation with given input sequence.
 
         Args:
-            inputs: Input current matrix, shape (n_timesteps, n_inputs)
+            inputs: Input current matrix, shape (n_timesteps, n_inputs).
+                May be a plain numpy array or a pynapple ``TsdFrame``.
             initial_state: Initial hidden state. If None, uses zeros.
             record_states: Whether to record all hidden states
 
         Returns:
-            outputs: Output traces, shape (n_timesteps, n_outputs)
-            states: Hidden states if record_states=True, else None
+            outputs: ``TsdFrame`` of output traces (n_timesteps, n_outputs)
+                in mV, time-indexed in ms.
+            states: ``TsdFrame`` of hidden states if record_states=True,
+                else None.
         """
-        n_steps = inputs.shape[0]
+        inputs_arr = np.asarray(inputs)
+        n_steps = inputs_arr.shape[0]
 
         # Initialize state
         if initial_state is None:
@@ -55,43 +60,52 @@ class Simulator:
             h = initial_state.copy()
 
         # Storage
-        outputs = np.zeros((n_steps, self.system.n_outputs))
-        states = np.zeros((n_steps, self.system.n_hidden)) if record_states else None
+        outputs_arr = np.zeros((n_steps, self.system.n_outputs))
+        n_hid = self.system.n_hidden
+        states_arr = np.zeros((n_steps, n_hid)) if record_states else None
 
         # Integration loop
         for t in range(n_steps):
-            u = inputs[t]
+            u = inputs_arr[t]
 
             # Record state before step (optional)
             if record_states:
-                states[t] = h.copy()
+                states_arr[t] = h.copy()
 
             # Compute output
-            outputs[t] = self.system.compute_output(h)
+            outputs_arr[t] = self.system.compute_output(h)
 
             # Update state
             h = self.system.step(h, u, self.dt_ms)
 
+        t_ms = np.arange(n_steps, dtype=float) * self.dt_ms
+        outputs = nap.TsdFrame(t=t_ms, d=outputs_arr, time_units="ms")
+        states: Optional[nap.TsdFrame] = (
+            nap.TsdFrame(t=t_ms, d=states_arr, time_units="ms")
+            if states_arr is not None
+            else None
+        )
         return outputs, states
 
     def run_batch(
         self,
         input_batch: np.ndarray,
         initial_states: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
+    ) -> List[nap.TsdFrame]:
         """Run simulation for batch of input sequences (same system).
 
         Args:
-            input_batch: Batch of inputs, shape (n_samples, n_timesteps, n_inputs)
-            initial_states: Initial states, shape (n_samples, n_hidden) or None
+            input_batch: Batch of inputs,
+                shape (n_samples, n_timesteps, n_inputs)
+            initial_states: Initial states,
+                shape (n_samples, n_hidden) or None
 
         Returns:
-            outputs: Batch of outputs, shape (n_samples, n_timesteps, n_outputs)
+            List of ``TsdFrame`` outputs, one per sample.
+            Each TsdFrame has shape (n_timesteps, n_outputs).
         """
         n_samples = input_batch.shape[0]
-        n_steps = input_batch.shape[1]
-
-        outputs = np.zeros((n_samples, n_steps, self.system.n_outputs))
+        outputs = []
 
         for i in range(n_samples):
             initial = None
@@ -99,15 +113,15 @@ class Simulator:
                 initial = initial_states[i]
 
             out, _ = self.run(input_batch[i], initial_state=initial)
-            outputs[i] = out
+            outputs.append(out)
 
         return outputs
 
     def run_with_multiple_systems(
         self,
         systems: list,
-        inputs: np.ndarray,
-    ) -> np.ndarray:
+        inputs: Union[np.ndarray, nap.TsdFrame],
+    ) -> List[nap.TsdFrame]:
         """Run same input through multiple different systems.
 
         Args:
@@ -115,42 +129,39 @@ class Simulator:
             inputs: Input currents, shape (n_timesteps, n_inputs)
 
         Returns:
-            outputs: Array of output traces, shape
-                (n_systems, n_timesteps, n_outputs)
+            List of ``TsdFrame`` output traces, one per system.
+            Each TsdFrame has shape (n_timesteps, n_outputs).
         """
-        n_systems = len(systems)
-        n_steps = inputs.shape[0]
-        n_outputs = systems[0].n_outputs
-
-        all_outputs = np.zeros((n_systems, n_steps, n_outputs))
-
-        for i, system in enumerate(systems):
+        all_outputs = []
+        for system in systems:
             outputs, _ = self._run_single(system, inputs)
-            all_outputs[i] = outputs
+            all_outputs.append(outputs)
 
         return all_outputs
 
     def _run_single(
         self,
         system: Any,
-        inputs: np.ndarray,
+        inputs: Union[np.ndarray, nap.TsdFrame],
         initial_state: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    ) -> Tuple[nap.TsdFrame, None]:
         """Run simulation for a single system (internal helper)."""
-        n_steps = inputs.shape[0]
+        inputs_arr = np.asarray(inputs)
+        n_steps = inputs_arr.shape[0]
 
         if initial_state is None:
             h = system.reset_state()
         else:
             h = initial_state.copy()
 
-        outputs = np.zeros((n_steps, system.n_outputs))
+        outputs_arr = np.zeros((n_steps, system.n_outputs))
 
         for t in range(n_steps):
-            outputs[t] = system.compute_output(h)
-            h = system.step(h, inputs[t], self.dt_ms)
+            outputs_arr[t] = system.compute_output(h)
+            h = system.step(h, inputs_arr[t], self.dt_ms)
 
-        return outputs, None
+        t_ms = np.arange(n_steps, dtype=float) * self.dt_ms
+        return nap.TsdFrame(t=t_ms, d=outputs_arr, time_units="ms"), None
 
     def check_stability(
         self,

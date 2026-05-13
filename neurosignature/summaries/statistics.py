@@ -1,12 +1,13 @@
 """Basic and global summary statistics for output traces."""
 
 import numpy as np
+import pynapple as nap
 from scipy import stats
-from typing import Dict, Optional
+from typing import Dict, Union
 
 
 def compute_channel_statistics(
-    traces: np.ndarray,
+    traces: Union[np.ndarray, nap.TsdFrame],
 ) -> Dict[str, np.ndarray]:
     """Compute per-channel summary statistics.
 
@@ -19,6 +20,7 @@ def compute_channel_statistics(
         - rms (root-mean-square)
         - skewness, kurtosis
     """
+    traces = np.asarray(traces)
     return {
         "mean": np.mean(traces, axis=0),
         "variance": np.var(traces, axis=0),
@@ -32,7 +34,7 @@ def compute_channel_statistics(
 
 
 def compute_global_statistics(
-    traces: np.ndarray,
+    traces: Union[np.ndarray, nap.TsdFrame],
     max_lag: int = 50,
 ) -> Dict[str, np.ndarray]:
     """Compute global (cross-channel) summary statistics.
@@ -48,11 +50,13 @@ def compute_global_statistics(
         - autocorrelation_decay: Autocorrelation decay per channel
         - approximate_entropy: Approximate entropy estimate
     """
+    traces = np.asarray(traces)
     n_steps, n_channels = traces.shape
 
     # Pairwise correlation matrix
     # Standardize each channel
-    standardized = (traces - np.mean(traces, axis=0)) / (np.std(traces, axis=0) + 1e-10)
+    std = np.std(traces, axis=0) + 1e-10
+    standardized = (traces - np.mean(traces, axis=0)) / std
     correlation_matrix = np.corrcoef(standardized.T)
 
     # Covariance eigenvalues
@@ -136,7 +140,7 @@ def concatenate_statistics(
 
 
 def compute_descriptor(
-    traces: np.ndarray,
+    traces: Union[np.ndarray, nap.TsdFrame],
     top_k_eigenvalues: int = 10,
     n_autocorr_lags: int = 10,
 ) -> np.ndarray:

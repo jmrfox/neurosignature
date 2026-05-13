@@ -1,6 +1,7 @@
 """Poisson process input generation with routing."""
 
 import numpy as np
+import pynapple as nap
 from typing import Optional, List
 
 
@@ -42,7 +43,7 @@ class PoissonGenerator:
         self,
         duration_ms: float,
         dt_ms: float = 1.0,
-    ) -> List[np.ndarray]:
+    ) -> nap.TsGroup:
         """Generate Poisson events for all channels.
 
         Args:
@@ -50,8 +51,9 @@ class PoissonGenerator:
             dt_ms: Time step in milliseconds
 
         Returns:
-            List of event time arrays, one per channel.
-            Each array contains event times in ms.
+            TsGroup with one Ts per channel. Timestamps are in ms
+            (time_units="ms" at construction; internally stored in seconds
+            by pynapple).
         """
         # Total simulation time in seconds for rate calculation
         duration_s = duration_ms / 1000.0
@@ -61,9 +63,7 @@ class PoissonGenerator:
         n_expected = int(self.lambda_max * duration_s * 1.5)  # Buffer
 
         # Inter-event times are exponential
-        inter_event_times = self.rng.exponential(
-            1.0 / self.lambda_max, size=n_expected
-        )
+        inter_event_times = self.rng.exponential(1.0 / self.lambda_max, size=n_expected)
         event_times_s = np.cumsum(inter_event_times)
 
         # Keep only events within duration
@@ -71,19 +71,24 @@ class PoissonGenerator:
         event_times_ms = event_times_s * 1000.0
 
         # Route events to channels
-        channel_events = [[] for _ in range(self.n_channels)]
+        channel_events: List[List[float]] = [[] for _ in range(self.n_channels)]
         for t in event_times_ms:
             channel = self.rng.choice(self.n_channels, p=self.routing_probs)
             channel_events[channel].append(t)
 
-        # Convert to arrays
-        return [np.array(events) for events in channel_events]
+        # Build TsGroup: one Ts per channel, times in ms
+        epoch = nap.IntervalSet(start=0.0, end=duration_ms, time_units="ms")
+        ts_dict = {
+            ch: nap.Ts(t=np.array(events), time_units="ms")
+            for ch, events in enumerate(channel_events)
+        }
+        return nap.TsGroup(ts_dict, time_support=epoch)
 
     def generate_spike_train(
         self,
         duration_ms: float,
         dt_ms: float = 1.0,
-    ) -> np.ndarray:
+    ) -> nap.TsdFrame:
         """Generate binary spike train matrix.
 
         Args:
@@ -91,20 +96,29 @@ class PoissonGenerator:
             dt_ms: Time step in milliseconds
 
         Returns:
-            Binary spike train array, shape (n_timesteps, n_channels)
+            TsdFrame of shape (n_timesteps, n_channels) with binary spike
+            indicators. Time index is in ms (time_units="ms" at construction;
+            internally stored in seconds by pynapple).
         """
         n_steps = int(duration_ms / dt_ms)
         spike_train = np.zeros((n_steps, self.n_channels), dtype=np.int32)
 
-        events = self.generate_events(duration_ms, dt_ms)
+        ts_group = self.generate_events(duration_ms, dt_ms)
 
-        for channel_idx, event_times in enumerate(events):
-            for t in event_times:
+        for channel_idx in range(self.n_channels):
+            ts = ts_group[channel_idx]
+            event_times_ms = ts.index * 1000.0  # pynapple stores in seconds
+            for t in event_times_ms:
                 step = int(t / dt_ms)
                 if step < n_steps:
                     spike_train[step, channel_idx] = 1
 
-        return spike_train
+        t_ms = np.arange(n_steps, dtype=float) * dt_ms
+        return nap.TsdFrame(
+            t=t_ms,
+            d=spike_train,
+            time_units="ms",
+        )
 
     def get_event_count_stats(self, events: List[np.ndarray]) -> dict:
         """Compute event count statistics.

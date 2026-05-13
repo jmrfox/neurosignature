@@ -181,22 +181,22 @@ def sample_loguniform(
     return np.exp(rng.uniform(np.log(low), np.log(high), size=size))
 
 
-def alpha_kernel(t_ms: np.ndarray, tau_s: float) -> np.ndarray:
+def alpha_kernel(t_ms: np.ndarray, tau_ms: float) -> np.ndarray:
     """Compute alpha-function synaptic kernel values.
 
-    α(t) = H(t) · (t / τ_s) · exp(-t / τ_s)
+    α(t) = H(t) · (t / τ) · exp(-t / τ)
 
     where H(t) is the Heaviside step function.
 
     Args:
         t_ms: Time array in milliseconds (may include negative values)
-        tau_s: Synaptic decay time constant in milliseconds
+        tau_ms: Synaptic decay time constant in milliseconds
 
     Returns:
         Kernel values at each time point, shape same as t_ms
     """
     t = np.asarray(t_ms, dtype=float)
-    t_norm = t / tau_s
+    t_norm = t / tau_ms
     alpha = t_norm * np.exp(-t_norm)
     alpha[t < 0] = 0.0
     return alpha
