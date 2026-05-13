@@ -1,9 +1,5 @@
 # %% [markdown]
-# # ContinuousTimeRNN Exploration: Parameter Effects on Trace Variability
-#
-# This notebook explores how different parameters affect the dynamics and trace
-# variability of `ContinuousTimeRNN` systems according to the design_2.2.md
-# specification.
+# # ContinuousTimeRNN testing
 #
 # Key parameters:
 # - **r_int**: Integration matrix spectral radius (0.3-0.8)

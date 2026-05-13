@@ -108,7 +108,7 @@ plt.show()
 
 # %%
 # Sweep r_int values
-r_int_values = [0.3, 0.5, 0.7, 0.8]
+r_int_values = [0.2, 0.5, 0.8]
 n_systems = len(r_int_values)
 
 systems = []
@@ -157,7 +157,7 @@ plt.show()
 
 # %%
 # Sweep r_prop values
-r_prop_values = [0.05, 0.1, 0.2, 0.3]
+r_prop_values = [0.05, 0.1, 0.2]
 n_prop = len(r_prop_values)
 
 prop_systems = []
@@ -204,7 +204,7 @@ plt.show()
 
 # %%
 # Sweep gain values
-gain_values = [0.0, 0.1, 0.2, 0.3]
+gain_values = [0.0, 0.1, 0.4]
 n_gains = len(gain_values)
 
 gain_systems = []
