@@ -25,9 +25,9 @@ plt.rcParams["axes.formatter.useoffset"] = False
 # only `g` differs.
 
 # %%
-n_hidden = 16
-n_inputs = 3
-n_outputs = 4
+n_hidden = 20
+n_inputs = 20
+n_outputs = 20
 dt_ms = 1.0
 
 rng = np.random.default_rng(0)
@@ -61,8 +61,8 @@ common_kwargs = dict(
     dt_ms=dt_ms,
 )
 
-system_a = ns.ContinuousTimeRNN(g=0.05, **common_kwargs)
-system_b = ns.ContinuousTimeRNN(g=0.5, **common_kwargs)
+system_a = ns.ContinuousTimeRNN(g=0.0, **common_kwargs)
+system_b = ns.ContinuousTimeRNN(g=0.2, **common_kwargs)
 
 print("System A:", system_a)
 print("System B:", system_b)
@@ -78,7 +78,7 @@ input_gen = ns.InputGenerator(
     seed=42,
 )
 
-duration_ms = 500.0
+duration_ms = 4000.0
 reference_channel = 0
 
 descriptor_components = [
@@ -112,7 +112,7 @@ comparator = ns.SystemComparator(
     descriptor=vd,
 )
 
-results = comparator.compare(n_trials=n_trials, duration_ms=duration_ms, mode="matched")
+results = comparator.compare(n_trials=n_trials, duration_ms=duration_ms, mode="cross")
 
 Z_A = results["Z_A"]
 Z_B = results["Z_B"]
@@ -198,6 +198,11 @@ plt.show()
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
+
+def n_bins(n):
+    return max(5, min(50, int(np.sqrt(n))))
+
+
 for ax, key, color, title in zip(
     axes,
     ["euclidean", "cosine"],
@@ -205,7 +210,7 @@ for ax, key, color, title in zip(
     ["Euclidean distance (cross)", "Cosine distance (cross)"],
 ):
     dists = results[key]["distances"]
-    ax.hist(dists, bins=30, color=color, alpha=0.8, edgecolor="white")
+    ax.hist(dists, bins=n_bins(len(dists)), color=color, alpha=0.8, edgecolor="white")
     ax.axvline(
         results[key]["mean"],
         color="black",
@@ -223,3 +228,73 @@ fig.suptitle(
 
 plt.tight_layout()
 plt.show()
+
+# %% [markdown]
+# ## 7. Pairwise Joint Histograms
+#
+# Grid where both rows and columns correspond to descriptor components.
+# Off-diagonal cells show a 2-D histogram of component i (x) vs component j
+# (y) for System A (steelblue) and System B (tomato), overlaid with
+# transparency.  Diagonal cells show per-component marginal histograms.
+
+# %%
+n_components = len(component_labels)
+bins = n_bins(n_trials)
+
+fig, axes = plt.subplots(
+    n_components,
+    n_components,
+    figsize=(n_components * 1.8, n_components * 1.8),
+    squeeze=False,
+)
+
+for row in range(n_components):
+    for col in range(n_components):
+        ax = axes[row, col]
+        x_a, y_a = Z_A[:, col], Z_A[:, row]
+        x_b, y_b = Z_B[:, col], Z_B[:, row]
+
+        if row == col:
+            ax.hist(x_a, bins=bins, color="steelblue", alpha=0.6, density=True)
+            ax.hist(x_b, bins=bins, color="tomato", alpha=0.6, density=True)
+        else:
+            lo_x = min(x_a.min(), x_b.min())
+            hi_x = max(x_a.max(), x_b.max())
+            lo_y = min(y_a.min(), y_b.min())
+            hi_y = max(y_a.max(), y_b.max())
+            range_2d = [[lo_x, hi_x], [lo_y, hi_y]]
+            ax.hist2d(x_a, y_a, bins=bins, range=range_2d, cmap="Blues", alpha=0.7)
+            ax.hist2d(x_b, y_b, bins=bins, range=range_2d, cmap="Reds", alpha=0.5)
+
+        ax.tick_params(labelsize=4, length=2, pad=1)
+
+        if col == 0:
+            ax.set_ylabel(component_labels[row], fontsize=5, labelpad=2)
+        else:
+            ax.set_yticklabels([])
+        if row == n_components - 1:
+            ax.set_xlabel(component_labels[col], fontsize=5, labelpad=2)
+        else:
+            ax.set_xticklabels([])
+
+legend_handles = [
+    plt.Rectangle((0, 0), 1, 1, fc="steelblue", alpha=0.7, label="System A"),
+    plt.Rectangle((0, 0), 1, 1, fc="tomato", alpha=0.7, label="System B"),
+]
+fig.legend(
+    handles=legend_handles,
+    loc="upper right",
+    fontsize=8,
+    framealpha=0.9,
+)
+
+fig.suptitle(
+    f"Pairwise Joint Histograms — {n_trials} trials each",
+    fontsize=11,
+    y=1.01,
+)
+
+plt.tight_layout()
+plt.show()
+
+# %%
