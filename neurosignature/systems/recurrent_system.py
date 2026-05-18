@@ -1,8 +1,9 @@
 """Passive subthreshold dynamical operator framework."""
 
 import numpy as np
+import pynapple as nap
 from typing import Union, Callable
-from neurosignature.math import relu, softplus
+from neurosignature.math import relu, softplus, alpha_kernel
 
 
 class ContinuousTimeRNN:
@@ -34,6 +35,8 @@ class ContinuousTimeRNN:
         polarity: Output polarity mode - "bipolar", "excitatory",
             or "inhibitory"
         phi: Nonlinearity - "tanh" or "softplus"
+        tau_syn_ms: Synaptic decay time constant in ms (default: 5.0)
+        dt_ms: Integration time step in ms (default: 1.0)
     """
 
     def __init__(
@@ -50,6 +53,8 @@ class ContinuousTimeRNN:
         V_rest: float = -65.0,
         polarity: str = "bipolar",
         phi: str = "tanh",
+        tau_syn_ms: float = 5.0,
+        dt_ms: float = 1.0,
     ):
         self.n_hidden = n_hidden
         self.n_inputs = n_inputs
@@ -58,6 +63,8 @@ class ContinuousTimeRNN:
         self.V_rest = V_rest
         self.polarity = polarity.lower()
         self.phi_name = phi.lower()
+        self.tau_syn_ms = tau_syn_ms
+        self.dt_ms = dt_ms
 
         # Validate polarity
         if self.polarity not in ["bipolar", "excitatory", "inhibitory"]:
@@ -156,6 +163,46 @@ class ContinuousTimeRNN:
 
         return self.V_rest + perturbation
 
+    def __call__(self, ts_group: nap.TsGroup) -> nap.TsdFrame:
+        """Run simulation from a TsGroup of input event streams.
+
+        Converts spike timestamps to continuous currents via alpha-function
+        synaptic kernel, then integrates the dynamics with Euler method.
+
+        Args:
+            ts_group: Input event streams, one ``Ts`` per input channel.
+                Timestamps are stored internally in seconds by pynapple.
+
+        Returns:
+            ``TsdFrame`` of output voltage traces, shape
+            (n_timesteps, n_outputs), time-indexed in ms.
+        """
+        # Determine duration from the TsGroup time support
+        support = ts_group.time_support
+        duration_ms = float((support["end"][0] - support["start"][0]) * 1000.0)
+        n_steps = int(duration_ms / self.dt_ms)
+        t_grid = np.arange(n_steps) * self.dt_ms
+
+        # Build continuous current matrix via alpha kernel (n_steps, n_inputs)
+        currents = np.zeros((n_steps, self.n_inputs))
+        keys = sorted(ts_group.keys())
+        for col_idx, key in enumerate(keys):
+            ts = ts_group[key]
+            times_ms = ts.index * 1000.0
+            for event_time in times_ms:
+                dt_vec = t_grid - event_time
+                currents[:, col_idx] += alpha_kernel(dt_vec, self.tau_syn_ms)
+
+        # Euler integration
+        h = self.reset_state()
+        outputs_arr = np.zeros((n_steps, self.n_outputs))
+        for t in range(n_steps):
+            outputs_arr[t] = self.compute_output(h)
+            h = self.step(h, currents[t], self.dt_ms)
+
+        t_ms = np.arange(n_steps, dtype=float) * self.dt_ms
+        return nap.TsdFrame(t=t_ms, d=outputs_arr, time_units="ms")
+
     def reset_state(self) -> np.ndarray:
         """Return initial hidden state (zeros)."""
         return np.zeros(self.n_hidden)
@@ -172,6 +219,8 @@ class ContinuousTimeRNN:
             "V_rest": self.V_rest,
             "polarity": self.polarity,
             "phi": self.phi_name,
+            "tau_syn_ms": self.tau_syn_ms,
+            "dt_ms": self.dt_ms,
             "n_hidden": self.n_hidden,
             "n_inputs": self.n_inputs,
             "n_outputs": self.n_outputs,

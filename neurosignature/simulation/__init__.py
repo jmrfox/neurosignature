@@ -1,5 +1,5 @@
-"""Simulation engine for dynamical systems."""
+"""Simulator wrappers for user-defined system callables."""
 
-from .simulator import Simulator
+from .simulator import Simulator, BatchSimulator
 
-__all__ = ["Simulator"]
+__all__ = ["Simulator", "BatchSimulator"]

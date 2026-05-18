@@ -2,7 +2,7 @@
 
 import numpy as np
 import pynapple as nap
-from neurosignature.inputs import PoissonGenerator, SynapticKernel
+from neurosignature.inputs import PoissonGenerator, InputGenerator
 
 
 def test_poisson_generator_init():
@@ -45,88 +45,29 @@ def test_spike_train_shape():
     assert np.all((arr == 0) | (arr == 1))
 
 
-def test_synaptic_kernel_init():
-    """Test synaptic kernel initialization."""
-    kernel = SynapticKernel(tau_ms=10.0, dt_ms=1.0)
-    assert kernel.tau_ms == 10.0
-    assert kernel.dt_ms == 1.0
+def test_input_generator_generate_returns_tsgroup():
+    """InputGenerator.generate returns a TsGroup."""
+    ig = InputGenerator(n_channels=3, rate_hz=50.0, dt_ms=1.0, seed=7)
+    result = ig.generate(duration_ms=200.0)
+    assert isinstance(result, nap.TsGroup)
+    assert len(result) == 3
 
 
-def test_kernel_shape():
-    """Test alpha kernel has correct shape."""
-    kernel = SynapticKernel(tau_ms=10.0)
-    t = np.linspace(0, 100, 200)
-    alpha = kernel.kernel(t)
-
-    # Peak should be at t = tau_s
-    peak_idx = np.argmax(alpha)
-    assert abs(t[peak_idx] - 10.0) < 0.6  # Within half time step
-
-    # Should decay to near zero (at t=100 with tau=10, alpha ~ 0.0004)
-    assert alpha[-1] < 0.01
+def test_input_generator_generate_batch():
+    """InputGenerator.generate_batch returns a list of TsGroups."""
+    ig = InputGenerator(n_channels=3, rate_hz=50.0, dt_ms=1.0, seed=7)
+    batch = ig.generate_batch(n_trials=5, duration_ms=100.0)
+    assert len(batch) == 5
+    for ts_group in batch:
+        assert isinstance(ts_group, nap.TsGroup)
+        assert len(ts_group) == 3
 
 
-def test_kernel_causality():
-    """Test kernel is causal (zero for t < 0)."""
-    kernel = SynapticKernel(tau_ms=10.0)
-    t = np.linspace(-20, 50, 100)
-    alpha = kernel.kernel(t)
-    assert np.all(alpha[t < 0] == 0)
-
-
-def test_convolve_events():
-    """Test event convolution produces smooth current."""
-    kernel = SynapticKernel(tau_ms=10.0, dt_ms=1.0)
-    events = np.array([10.0, 50.0, 80.0])  # Events at 10, 50, 80 ms
-    current = kernel.convolve_events(events, duration_ms=100.0)
-
-    assert len(current) == 100
-    assert np.all(current >= 0)
-    assert np.all(np.isfinite(current))
-
-    # Should have peaks near event times
-    peaks = np.where(current > np.percentile(current, 95))[0]
-    assert len(peaks) > 0
-
-
-def test_generate_input_currents():
-    """Test multi-channel input current generation."""
-    kernel = SynapticKernel(tau_ms=10.0, dt_ms=1.0)
-
-    # Create events for 3 channels (list-of-arrays path)
-    events = [
-        np.array([10.0, 30.0]),
-        np.array([20.0]),
-        np.array([]),  # No events
-    ]
-
-    currents = kernel.generate_input_currents(events, duration_ms=50.0)
-    assert isinstance(currents, nap.TsdFrame)
-    assert currents.shape == (50, 3)
-    assert np.all(np.asarray(currents)[:, 2] == 0)  # Channel 3 no events
-    assert np.all(np.asarray(currents) >= 0)
-
-
-def test_kernel_peak_amplitude():
-    """Test kernel peak amplitude is correct."""
-    kernel = SynapticKernel(tau_ms=10.0)
-    peak = kernel.get_peak_amplitude()
-    expected = np.exp(-1.0)
-    assert abs(peak - expected) < 1e-10
-
-
-def test_end_to_end_pipeline():
-    """Test full pipeline: events -> currents."""
-    gen = PoissonGenerator(n_channels=5, lambda_max=100.0, seed=42)
-    kernel = SynapticKernel(tau_ms=10.0, dt_ms=1.0)
-
-    # Generate events (TsGroup)
-    events = gen.generate_events(duration_ms=100.0, dt_ms=1.0)
-    assert isinstance(events, nap.TsGroup)
-
-    # Convert to currents (TsdFrame)
-    currents = kernel.generate_input_currents(events, duration_ms=100.0)
-    assert isinstance(currents, nap.TsdFrame)
-    assert currents.shape == (100, 5)
-    assert np.all(np.isfinite(np.asarray(currents)))
-    assert np.all(np.asarray(currents) >= 0)
+def test_input_generator_trials_are_independent():
+    """Each trial from generate_batch should have different spike times."""
+    ig = InputGenerator(n_channels=2, rate_hz=100.0, dt_ms=1.0, seed=0)
+    batch = ig.generate_batch(n_trials=3, duration_ms=500.0)
+    # At 100 Hz over 500 ms we expect ~50 events; comparing total counts
+    counts = [sum(len(batch[i][k]) for k in batch[i].keys()) for i in range(3)]
+    # Trials should not all be identical
+    assert not (counts[0] == counts[1] == counts[2])

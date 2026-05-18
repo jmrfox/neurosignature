@@ -1,11 +1,18 @@
 """Tests for summary statistics and descriptor computation."""
 
 import numpy as np
+import pynapple as nap
 from neurosignature.summaries import (
     compute_channel_statistics,
     compute_global_statistics,
     compute_spectral_statistics,
-    DescriptorAssembler,
+    ReferenceMean,
+    ReferenceStd,
+    ResidualEnergy,
+    ResidualParticipationRatio,
+    CrossCorrelationMean,
+    TransmissionEfficiency,
+    VectorDescriptor,
 )
 
 
@@ -80,72 +87,64 @@ def test_spectral_statistics():
     assert abs(dom_freq - 10.0) < 2.0  # Allow some FFT bin spread
 
 
-def test_descriptor_assembler():
-    """Test full descriptor assembly."""
-    traces = np.random.randn(1000, 5)
-
-    assembler = DescriptorAssembler()
-    descriptor = assembler.compute_descriptor(traces)
-
-    assert isinstance(descriptor, np.ndarray)
-    assert len(descriptor) > 0
-    assert np.all(np.isfinite(descriptor))
+def _make_tsdframe(arr: np.ndarray) -> nap.TsdFrame:
+    t_ms = np.arange(arr.shape[0], dtype=float)
+    return nap.TsdFrame(t=t_ms, d=arr, time_units="ms")
 
 
-def test_descriptor_consistency():
-    """Test that descriptors are consistent for similar traces."""
-    # Generate two similar traces
-    base = np.random.randn(1000, 4)
-    traces1 = base + np.random.randn(1000, 4) * 0.01
-    traces2 = base + np.random.randn(1000, 4) * 0.01
-
-    assembler = DescriptorAssembler()
-    desc1 = assembler.compute_descriptor(traces1)
-    desc2 = assembler.compute_descriptor(traces2)
-
-    # Similar traces should have similar descriptors
-    distance = np.linalg.norm(desc1 - desc2)
-    assert distance < np.linalg.norm(desc1) * 0.5
+def test_vector_descriptor_length():
+    """VectorDescriptor returns a vector with one entry per descriptor."""
+    descriptors = [ReferenceMean(), ReferenceStd(), ResidualEnergy(dt_ms=1.0)]
+    vd = VectorDescriptor(descriptors, reference_channel=0)
+    traces = _make_tsdframe(np.random.randn(500, 3))
+    result = vd.compute(traces)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == (3,)
+    assert np.all(np.isfinite(result))
 
 
-def test_descriptor_distinguishes_systems():
-    """Test that descriptors distinguish different signal types."""
-    # Slow oscillation (multiple channels for valid correlation)
+def test_vector_descriptor_reference_mean_value():
+    """ReferenceMean via VectorDescriptor matches np.mean of channel 0."""
+    arr = np.random.randn(500, 3)
+    traces = _make_tsdframe(arr)
+    vd = VectorDescriptor([ReferenceMean()], reference_channel=0)
+    result = vd.compute(traces)
+    np.testing.assert_almost_equal(result[0], np.mean(arr[:, 0]))
+
+
+def test_cross_correlation_mean():
+    """CrossCorrelationMean returns a scalar in [-1, 1]."""
+    arr = np.random.randn(500, 4)
+    traces = _make_tsdframe(arr)
+    v_ref = arr[:, 0]
+    val = CrossCorrelationMean().compute(traces, v_ref)
+    assert isinstance(val, float)
+    assert -1.0 <= val <= 1.0
+
+
+def test_transmission_efficiency_positive():
+    """TransmissionEfficiency (log transform) returns a finite scalar."""
+    arr = np.random.randn(300, 4)
+    traces = _make_tsdframe(arr)
+    v_ref = arr[:, 0]
+    val = TransmissionEfficiency().compute(traces, v_ref)
+    assert np.isfinite(val)
+
+
+def test_vector_descriptor_distinguishes_signals():
+    """VectorDescriptor distinguishes slow vs fast oscillations."""
     t = np.linspace(0, 100, 1000)
-    slow = np.column_stack(
+    slow = _make_tsdframe(np.column_stack([np.sin(0.1 * t), np.cos(0.1 * t)]))
+    fast = _make_tsdframe(np.column_stack([np.sin(10 * t), np.cos(10 * t)]))
+    vd = VectorDescriptor(
         [
-            np.sin(0.1 * t),
-            np.sin(0.1 * t + 0.5),
-            np.sin(0.1 * t + 1.0),
-        ]
+            ReferenceMean(),
+            ReferenceStd(),
+            ResidualEnergy(dt_ms=0.1),
+            ResidualParticipationRatio(),
+        ],
+        reference_channel=0,
     )
-
-    # Fast oscillation
-    fast = np.column_stack(
-        [
-            np.sin(10 * t),
-            np.sin(10 * t + 0.5),
-            np.sin(10 * t + 1.0),
-        ]
-    )
-
-    assembler = DescriptorAssembler()
-    desc_slow = assembler.compute_descriptor(slow)
-    desc_fast = assembler.compute_descriptor(fast)
-
-    # Different signals should have different descriptors
-    distance = np.linalg.norm(desc_slow - desc_fast)
-    assert distance > 0.1
-
-
-def test_descriptor_info():
-    """Test descriptor info computation."""
-    assembler = DescriptorAssembler()
-    info = assembler.get_descriptor_info(n_channels=8)
-
-    assert "basic_statistics_dim" in info
-    assert "global_statistics_dim" in info
-    assert "total_dim" in info
-
-    # Total should be sum of components
-    assert info["total_dim"] > info["basic_statistics_dim"]
+    desc_slow = vd.compute(slow)
+    desc_fast = vd.compute(fast)
+    assert np.linalg.norm(desc_slow - desc_fast) > 0.01

@@ -1,6 +1,6 @@
-"""Experimental pipelines for system comparison."""
+"""Experimental pipelines for simulation and system comparison."""
 
+from .experiment import Experiment
 from .compare_systems import SystemComparator
-from .sweep_parameters import ParameterSweeper
 
-__all__ = ["SystemComparator", "ParameterSweeper"]
+__all__ = ["Experiment", "SystemComparator"]

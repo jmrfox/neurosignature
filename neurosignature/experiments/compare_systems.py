@@ -1,209 +1,175 @@
-"""System comparison pipeline for computing pairwise distances."""
+"""System comparison pipeline."""
 
 import numpy as np
-from typing import Dict, Optional
+from scipy.spatial.distance import cdist
+from scipy.stats import wasserstein_distance_nd
+
+from neurosignature.inputs.input_generator import InputGenerator
 from neurosignature.simulation.simulator import Simulator
-from neurosignature.summaries.descriptors import DescriptorAssembler
-from neurosignature.metrics.distances import (
-    compute_pairwise_distance_matrix,
-    compute_distance_statistics,
-)
+from neurosignature.summaries.descriptors import VectorDescriptor
 
-
-class _PlaceholderSystem:
-    """Placeholder system for initializing default Simulator."""
-
-    def __init__(self):
-        self.n_hidden = 1
-        self.n_inputs = 1
-        self.n_outputs = 1
-
-    def reset_state(self):
-        return np.zeros(1)
-
-    def step(self, h, u, dt):
-        return h
-
-    def compute_output(self, h):
-        return h
+_VALID_MODES = ("cross", "matched")
 
 
 class SystemComparator:
-    """Compare multiple dynamical systems using functional descriptors.
+    """Compare descriptor distributions produced by two simulators.
 
-    Pipeline:
-    1. Generate or receive multiple systems
-    2. Run simulations with shared or varied inputs
-    3. Compute descriptors for each system
-    4. Compute pairwise distances
-    5. Analyze distance structure
+    Both simulators receive independently drawn inputs from the same
+    ``input_gen`` on each trial.  A single shared ``VectorDescriptor``
+    maps each trial output to a descriptor vector ``z``.
 
     Args:
-        simulator: Simulator instance. If None, creates default Simulator.
-        descriptor_assembler: DescriptorAssembler. If None, creates default.
-        dt_ms: Time step in milliseconds (default: 1.0)
-
-    Example:
-        >>> comparator = SystemComparator()
-        >>> result = comparator.compare_with_shared_input(systems, inputs)
-        >>> distances = result["distance_matrix"]
+        input_gen: Input event stream generator shared by both systems.
+        simulator_a: First simulator (system A).
+        simulator_b: Second simulator (system B).
+        descriptor: Shared ``VectorDescriptor`` applied to both systems.
     """
 
     def __init__(
         self,
-        simulator: Optional[Simulator] = None,
-        descriptor_assembler: Optional[DescriptorAssembler] = None,
-        dt_ms: float = 1.0,
+        input_gen: InputGenerator,
+        simulator_a: Simulator,
+        simulator_b: Simulator,
+        descriptor: VectorDescriptor,
     ):
-        # Create default instances if not provided
-        if simulator is None:
-            # Placeholder system will be replaced in comparison methods
-            simulator = Simulator(_PlaceholderSystem(), dt_ms)
-        if descriptor_assembler is None:
-            descriptor_assembler = DescriptorAssembler()
+        self.input_gen = input_gen
+        self.simulator_a = simulator_a
+        self.simulator_b = simulator_b
+        self.descriptor = descriptor
 
-        self.simulator = simulator
-        self.descriptor_assembler = descriptor_assembler
-        self.dt_ms = dt_ms
-
-    def compare_with_shared_input(
-        self,
-        systems: list,
-        input_currents: np.ndarray,
-    ) -> Dict:
-        """Compare systems using the same input realization.
+    def run(self, n_trials: int, duration_ms: float) -> tuple:
+        """Run ``n_trials`` for each system and collect descriptor matrices.
 
         Args:
-            systems: List of systems to compare
-            input_currents: Input currents, shape (n_timesteps, n_inputs)
+            n_trials: Number of independent input realisations per system.
+            duration_ms: Duration of each trial in milliseconds.
 
         Returns:
-            Dictionary with descriptors, distance matrix, and statistics
+            Tuple ``(Z_A, Z_B)`` of descriptor matrices, each shape
+            ``(n_trials, descriptor_dim)``.
         """
-        # Run simulations and collect outputs
-        outputs_list = []
-        for system in systems:
-            sim = Simulator(system, self.dt_ms)
-            outputs, _ = sim.run(input_currents)
-            outputs_list.append(outputs)
+        Z_A, Z_B = [], []
+        for _ in range(n_trials):
+            ts = self.input_gen.generate(duration_ms)
+            Z_A.append(self.descriptor.compute(self.simulator_a.run(ts)))
+            ts = self.input_gen.generate(duration_ms)
+            Z_B.append(self.descriptor.compute(self.simulator_b.run(ts)))
+        return np.array(Z_A), np.array(Z_B)
 
-        # Compute descriptors
-        descriptors = self.descriptor_assembler.compute_descriptors_batch(
-            outputs_list, self.dt_ms
-        )
+    def euclidean_distances(
+        self,
+        Z_A: np.ndarray,
+        Z_B: np.ndarray,
+        mode: str = "cross",
+    ) -> dict:
+        """Euclidean distances between descriptor vectors in Z_A and Z_B.
 
-        # Compute distances
-        distance_matrix = compute_pairwise_distance_matrix(
-            descriptors, metric="euclidean"
-        )
+        Args:
+            Z_A: Descriptor matrix for system A, shape (n_A, dim).
+            Z_B: Descriptor matrix for system B, shape (n_B, dim).
+            mode: ``"cross"`` (all n_A × n_B pairs) or ``"matched"``
+                (element-wise; requires n_A == n_B).
 
-        # Compute statistics
-        dist_stats = compute_distance_statistics(distance_matrix)
-
+        Returns:
+            Dict with keys ``"distances"`` (1-D array), ``"mean"``,
+            and ``"std"``.
+        """
+        dists = self._pairwise(Z_A, Z_B, metric="euclidean", mode=mode)
         return {
-            "descriptors": descriptors,
-            "distance_matrix": distance_matrix,
-            "distance_statistics": dist_stats,
+            "distances": dists,
+            "mean": float(dists.mean()),
+            "std": float(dists.std()),
         }
 
-    def compare_with_varied_inputs(
+    def cosine_distances(
         self,
-        systems: list,
-        input_generator,
-        n_realizations: int = 5,
-    ) -> Dict:
-        """Compare systems using multiple input realizations.
-
-        Averages descriptors across realizations for robustness.
+        Z_A: np.ndarray,
+        Z_B: np.ndarray,
+        mode: str = "cross",
+    ) -> dict:
+        """Cosine distances between descriptor vectors in Z_A and Z_B.
 
         Args:
-            systems: List of systems to compare
-            input_generator: Callable that generates input currents
-            n_realizations: Number of input realizations per system
+            Z_A: Descriptor matrix for system A, shape (n_A, dim).
+            Z_B: Descriptor matrix for system B, shape (n_B, dim).
+            mode: ``"cross"`` (all n_A × n_B pairs) or ``"matched"``
+                (element-wise; requires n_A == n_B).
 
         Returns:
-            Dictionary with averaged descriptors and distance matrix
+            Dict with keys ``"distances"`` (1-D array), ``"mean"``,
+            and ``"std"``.
         """
-        # Collect descriptors across realizations
-        all_descriptors = []
+        dists = self._pairwise(Z_A, Z_B, metric="cosine", mode=mode)
+        return {
+            "distances": dists,
+            "mean": float(dists.mean()),
+            "std": float(dists.std()),
+        }
 
-        for _ in range(n_realizations):
-            input_currents = input_generator()
+    def wasserstein_distance(
+        self,
+        Z_A: np.ndarray,
+        Z_B: np.ndarray,
+    ) -> float:
+        """n-D Wasserstein distance between the two descriptor clouds.
 
-            # Run simulations
-            outputs_list = []
-            for system in systems:
-                sim = Simulator(system, self.dt_ms)
-                outputs, _ = sim.run(input_currents)
-                outputs_list.append(outputs)
+        Uses ``scipy.stats.wasserstein_distance_nd``, treating each row
+        of ``Z_A`` / ``Z_B`` as a sample from the respective distribution.
 
-            # Compute descriptors
-            descriptors = self.descriptor_assembler.compute_descriptors_batch(
-                outputs_list, self.dt_ms
+        Args:
+            Z_A: Descriptor matrix for system A, shape (n_A, dim).
+            Z_B: Descriptor matrix for system B, shape (n_B, dim).
+
+        Returns:
+            Scalar Wasserstein distance.
+        """
+        return float(wasserstein_distance_nd(Z_A, Z_B))
+
+    def compare(self, n_trials: int, duration_ms: float, mode: str = "cross") -> dict:
+        """Run both systems and return all pairwise distance metrics.
+
+        Args:
+            n_trials: Number of independent trials per system.
+            duration_ms: Trial duration in milliseconds.
+            mode: Pairwise comparison mode — "cross" or "matched".
+
+        Returns:
+            Dict with keys:
+
+            - ``"Z_A"``, ``"Z_B"``: descriptor matrices
+            - ``"euclidean"``: dict with ``"distances"``, ``"mean"``, ``"std"``
+            - ``"cosine"``:    dict with ``"distances"``, ``"mean"``, ``"std"``
+            - ``"wasserstein"``: scalar float
+        """
+        Z_A, Z_B = self.run(n_trials, duration_ms)
+        return {
+            "Z_A": Z_A,
+            "Z_B": Z_B,
+            "euclidean": self.euclidean_distances(Z_A, Z_B, mode=mode),
+            "cosine": self.cosine_distances(Z_A, Z_B, mode=mode),
+            "wasserstein": self.wasserstein_distance(Z_A, Z_B),
+        }
+
+    def _pairwise(
+        self,
+        Z_A: np.ndarray,
+        Z_B: np.ndarray,
+        metric: str,
+        mode: str,
+    ) -> np.ndarray:
+        if mode not in _VALID_MODES:
+            raise ValueError(f"Unknown mode {mode!r}. Must be one of {_VALID_MODES}.")
+        if mode == "matched":
+            if Z_A.shape[0] != Z_B.shape[0]:
+                raise ValueError(
+                    "matched mode requires equal n_trials, got "
+                    f"{Z_A.shape[0]} and {Z_B.shape[0]}."
+                )
+            return np.array(
+                [
+                    float(cdist(Z_A[i : i + 1], Z_B[i : i + 1], metric=metric)[0, 0])
+                    for i in range(Z_A.shape[0])
+                ]
             )
-            all_descriptors.append(descriptors)
-
-        # Average descriptors across realizations
-        descriptors_mean = np.mean(all_descriptors, axis=0)
-
-        # Compute distances on averaged descriptors
-        distance_matrix = compute_pairwise_distance_matrix(
-            descriptors_mean, metric="euclidean"
-        )
-
-        return {
-            "descriptors": descriptors_mean,
-            "descriptor_std": np.std(all_descriptors, axis=0),
-            "distance_matrix": distance_matrix,
-            "distance_statistics": compute_distance_statistics(distance_matrix),
-        }
-
-    def compare_groups(
-        self,
-        group_a: list,
-        group_b: list,
-        input_currents: np.ndarray,
-    ) -> Dict:
-        """Compare two groups of systems.
-
-        Computes within-group and between-group distances.
-
-        Args:
-            group_a: First group of systems
-            group_b: Second group of systems
-            input_currents: Shared input currents
-
-        Returns:
-            Dictionary with group comparison statistics
-        """
-        all_systems = group_a + group_b
-        n_a = len(group_a)
-
-        # Compute descriptors
-        result = self.compare_with_shared_input(all_systems, input_currents)
-        distance_matrix = result["distance_matrix"]
-
-        # Extract within-group and between-group distances
-        within_a = distance_matrix[:n_a, :n_a]
-        within_b = distance_matrix[n_a:, n_a:]
-        between = distance_matrix[:n_a, n_a:]
-
-        # Get upper triangles (excluding diagonals)
-        def upper_tri_values(mat):
-            mask = np.triu(np.ones_like(mat, dtype=bool), k=1)
-            return mat[mask]
-
-        within_a_vals = upper_tri_values(within_a)
-        within_b_vals = upper_tri_values(within_b)
-        between_vals = between.flatten()
-
-        return {
-            "within_group_a_mean": float(np.mean(within_a_vals)),
-            "within_group_b_mean": float(np.mean(within_b_vals)),
-            "between_groups_mean": float(np.mean(between_vals)),
-            "within_group_a_std": float(np.std(within_a_vals)),
-            "within_group_b_std": float(np.std(within_b_vals)),
-            "between_groups_std": float(np.std(between_vals)),
-            "descriptors": result["descriptors"],
-            "distance_matrix": distance_matrix,
-        }
+        D = cdist(Z_A, Z_B, metric=metric)
+        return D.ravel()

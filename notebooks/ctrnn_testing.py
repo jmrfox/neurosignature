@@ -1,38 +1,42 @@
 # %% [markdown]
 # # ContinuousTimeRNN Testing
 #
-# This notebook uses the simplified neurosignature API:
-# - `SystemGenerator` for easy system creation with presets
-# - `InputGenerator` for one-line synaptic input generation
-# - Operating regime presets (passive, weakly_active, active)
+# Quick sanity-check notebook for the refactored API:
+# - `InputGenerator.generate()` returns a `TsGroup` of Poisson spike trains
+# - `ContinuousTimeRNN.__call__` embeds the alpha-kernel convolution internally
+# - `Simulator` is a thin wrapper around the system callable
 
 # %%
 import numpy as np
-np.random.seed(1)
-
 import matplotlib.pyplot as plt
 import neurosignature as ns
-
 import seaborn as sns
 
+np.random.seed(1)
 sns.set_context("notebook")
-
-# Disable scientific notation on y-axes
 plt.rcParams["axes.formatter.useoffset"] = False
 
+# %% [markdown]
+# ## 1. Build the CTRNN
 
 # %%
-def relu(x):
-    return np.maximum(0, x)
-
 n_hidden = 16
 n_inputs = 3
 n_outputs = 4
+dt_ms = 1.0
 
-W_int = ns.generate_random_matrix(n_hidden, n_hidden, dist="normal", matrix_type="symmetric")
-W_prop = ns.generate_random_matrix(n_hidden, n_hidden, dist="normal", matrix_type="symmetric")
-W_u = relu(ns.generate_random_matrix(n_hidden, n_inputs, dist="normal", matrix_type="dense"))
-W_o = relu(ns.generate_random_matrix(n_outputs, n_hidden, dist="normal", matrix_type="dense"))
+W_int = ns.generate_random_matrix(
+    n_hidden, n_hidden, dist="normal", matrix_type="symmetric"
+)
+W_prop = ns.generate_random_matrix(
+    n_hidden, n_hidden, dist="normal", matrix_type="symmetric"
+)
+W_u = ns.relu(
+    ns.generate_random_matrix(n_hidden, n_inputs, dist="normal", matrix_type="dense")
+)
+W_o = ns.relu(
+    ns.generate_random_matrix(n_outputs, n_hidden, dist="normal", matrix_type="dense")
+)
 
 system = ns.ContinuousTimeRNN(
     n_hidden=n_hidden,
@@ -42,67 +46,73 @@ system = ns.ContinuousTimeRNN(
     W_prop=W_prop,
     W_u=W_u,
     W_o=W_o,
-    g=0.5,
-    tau=0.1,
+    g=0.05,
+    tau=5.0,
     V_rest=-65.0,
     polarity="excitatory",
     phi="tanh",
+    tau_syn_ms=5.0,
+    dt_ms=dt_ms,
 )
 
+print(system)
+
+# %% [markdown]
+# ## 2. Generate Inputs & Run Simulation
+
 # %%
-# Create input generator
 input_gen = ns.InputGenerator(
-    n_channels=system.n_inputs,
-    rate_hz=50.0,  # total Poisson firing rate
-    tau_ms=2.0,  # Synaptic decay time constant (ms)
-    dt_ms=0.1,
+    n_channels=n_inputs,
+    rate_hz=50.0,
+    dt_ms=dt_ms,
+    seed=1,
 )
 
-# Generate smooth synaptic currents
-duration_ms = 300
-currents = input_gen.generate(duration_ms=duration_ms)
+duration_ms = 500.0
+ts_group = input_gen.generate(duration_ms=duration_ms)
 
-print(f"Input currents shape: {currents.shape}")
-print(f"Current range: [{currents.min():.2f}, {currents.max():.2f}]")
+simulator = ns.Simulator(system)
+outputs = simulator.run(ts_group)
+
+time_ms = np.asarray(outputs.index) * 1000.0
+outputs_arr = np.asarray(outputs)
+
+print(f"Input channels : {len(ts_group)}")
+print(f"Outputs shape  : {outputs.shape}")
+print(f"Output range   : [{outputs_arr.min():.3f}, {outputs_arr.max():.3f}] mV")
+
+# %% [markdown]
+# ## 3. Plot
 
 # %%
-# Run simulation
-simulator = ns.Simulator(system, dt_ms=0.1)
-outputs, states = simulator.run(currents, record_states=True)
+fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-# Time axis
-time = np.arange(len(outputs)) * simulator.dt_ms
-
-# Plot
-fig, axes = plt.subplots(3, 1, figsize=(12, 12))
-
-# Plot input currents
+# Spike raster
 ax = axes[0]
-for i in range(min(system.n_inputs, 3)):
-    ax.plot(time, currents[:, i], label=f"Input {i}", alpha=0.7)
-ax.set_ylabel("Current")
-ax.set_title("Synaptic Input Currents")
+for key in sorted(ts_group.keys()):
+    spike_times_ms = ts_group[key].index * 1000.0
+    ax.vlines(
+        spike_times_ms,
+        key - 0.4,
+        key + 0.4,
+        linewidth=1.5,
+        alpha=0.7,
+        label=f"Ch {key}",
+    )
+ax.set_ylabel("Input channel")
+ax.set_title("Poisson Input Spike Trains")
+ax.set_yticks(sorted(ts_group.keys()))
 ax.legend(loc="upper right", fontsize=8)
 
-# Plot outputs
+# Output traces
 ax = axes[1]
-for i in range(min(system.n_outputs, 5)):
-    ax.plot(time, outputs[:, i], label=f"Output {i}", alpha=0.8)
+for i in range(n_outputs):
+    ax.plot(time_ms, outputs_arr[:, i], label=f"Output {i}", alpha=0.85)
 ax.axhline(system.V_rest, color="gray", linestyle="--", alpha=0.5, label="V_rest")
-ax.set_ylabel("Voltage (mV)")
-ax.set_title("Output Traces (Voltage)")
-ax.legend(loc="upper right", fontsize=8)
-
-# Plot a few hidden units
-ax = axes[2]
-for i in range(min(5, system.n_hidden)):
-    ax.plot(time, states[:, i], label=f"Hidden {i}", alpha=0.8)
 ax.set_xlabel("Time (ms)")
-ax.set_ylabel("Hidden State")
-ax.set_title("Sample Hidden State Traces")
+ax.set_ylabel("Voltage (mV)")
+ax.set_title("Output Traces")
 ax.legend(loc="upper right", fontsize=8)
 
 plt.tight_layout()
 plt.show()
-
-# %%

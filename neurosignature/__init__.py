@@ -2,30 +2,57 @@
 
 __version__ = "0.1.0"
 
-# Public API - import key classes for convenient access
-from neurosignature.systems import ContinuousTimeRNN, SystemGenerator
-from neurosignature.simulation import Simulator
-from neurosignature.inputs import PoissonGenerator, SynapticKernel, InputGenerator
-from neurosignature.summaries import DescriptorAssembler, compute_descriptor
-from neurosignature.experiments import SystemComparator
-from neurosignature.metrics import (
-    compute_pairwise_distance_matrix,
-    compute_distance_statistics,
+# Public API
+from neurosignature.systems import ContinuousTimeRNN
+from neurosignature.simulation import Simulator, BatchSimulator
+from neurosignature.inputs import PoissonGenerator, InputGenerator
+from neurosignature.summaries import (
+    ScalarDescriptor,
+    BatchScalarDescriptor,
+    ReferenceMean,
+    ReferenceStd,
+    ReferenceSpectralCentroid,
+    ResidualMean,
+    ResidualStd,
+    ResidualEnergy,
+    ResidualSpectralCentroidMean,
+    ResidualSpectralCentroidStd,
+    ResidualParticipationRatio,
+    ResidualMaxEigenvalue,
+    ResidualEigenvalueEntropy,
+    CrossCorrelationMean,
+    TransmissionEfficiency,
+    VectorDescriptor,
+    BatchVectorDescriptor,
 )
+from neurosignature.experiments import Experiment, SystemComparator
 from neurosignature.math import relu, softplus, generate_random_matrix
 
 __all__ = [
     "ContinuousTimeRNN",
-    "SystemGenerator",
     "Simulator",
+    "BatchSimulator",
     "PoissonGenerator",
-    "SynapticKernel",
     "InputGenerator",
-    "DescriptorAssembler",
-    "compute_descriptor",
+    "ScalarDescriptor",
+    "BatchScalarDescriptor",
+    "ReferenceMean",
+    "ReferenceStd",
+    "ReferenceSpectralCentroid",
+    "ResidualMean",
+    "ResidualStd",
+    "ResidualEnergy",
+    "ResidualSpectralCentroidMean",
+    "ResidualSpectralCentroidStd",
+    "ResidualParticipationRatio",
+    "ResidualMaxEigenvalue",
+    "ResidualEigenvalueEntropy",
+    "CrossCorrelationMean",
+    "TransmissionEfficiency",
+    "VectorDescriptor",
+    "BatchVectorDescriptor",
+    "Experiment",
     "SystemComparator",
-    "compute_pairwise_distance_matrix",
-    "compute_distance_statistics",
     "relu",
     "softplus",
     "generate_random_matrix",
